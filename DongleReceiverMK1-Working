@@ -1,0 +1,43 @@
+#include <WiFi.h>
+#include <esp_now.h>
+#include "esp_wifi.h"
+
+#define LED_PIN D10
+
+typedef struct struct_message {
+  bool buttonPressed;
+} struct_message;
+
+struct_message receivedData;
+
+void OnDataRecv(const esp_now_recv_info_t *info, const uint8_t *incomingData, int len) {
+  memcpy(&receivedData, incomingData, sizeof(receivedData));
+
+  digitalWrite(LED_PIN, receivedData.buttonPressed ? HIGH : LOW);
+
+  Serial.print("Button received: ");
+  Serial.println(receivedData.buttonPressed);
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+
+  WiFi.mode(WIFI_STA);
+  esp_wifi_start();
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+
+  esp_now_register_recv_cb(OnDataRecv);
+
+  Serial.println("Dongle receiver ready");
+}
+
+void loop() {
+}
