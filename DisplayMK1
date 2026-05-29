@@ -1,0 +1,82 @@
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7789.h>
+#include <SPI.h>
+
+#define TFT_CS   D1
+#define TFT_DC   D2
+#define TFT_RST  D3
+
+#define TFT_MOSI D10
+#define TFT_SCLK D8
+#define TFT_BL   D0
+
+#define YELLOW 0xFFE0   // closest 16-bit RGB565 to #FEF100
+#define WHITE  ST77XX_WHITE
+#define BLACK  ST77XX_BLACK
+
+Adafruit_ST7789 tft = Adafruit_ST7789(
+  TFT_CS,
+  TFT_DC,
+  TFT_MOSI,
+  TFT_SCLK,
+  TFT_RST
+);
+
+void drawDashboard(int gear, int speed) {
+  tft.fillScreen(BLACK);
+
+  // Top-left title
+  tft.setTextColor(YELLOW);
+  tft.setTextSize(1);
+  tft.setCursor(8, 8);
+  tft.print("PORTEUR C1");
+
+  // Center huge gear number
+  tft.setTextColor(WHITE);
+  tft.setTextSize(8);
+
+  String gearText = String(gear);
+
+  // Approx center for 284x76 landscape
+  int16_t gearX = 118;
+  int16_t gearY = 8;
+
+  tft.setCursor(gearX, gearY);
+  tft.print(gearText);
+
+  // Tiny GEAR text under number
+  tft.setTextColor(YELLOW);
+  tft.setTextSize(1);
+  tft.setCursor(129, 66);
+  tft.print("GEAR");
+
+  // Right speed
+  tft.setTextColor(YELLOW);
+  tft.setTextSize(4);
+  tft.setCursor(205, 15);
+  tft.print(speed);
+
+  tft.setTextSize(1);
+  tft.setCursor(232, 58);
+  tft.print("KM/H");
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  pinMode(TFT_BL, OUTPUT);
+
+  // LaskaKit backlight is active LOW
+  digitalWrite(TFT_BL, LOW);
+
+  delay(50);
+
+  tft.init(76, 284);
+  tft.setRotation(1);
+  tft.invertDisplay(false);
+
+  drawDashboard(3, 128);
+}
+
+void loop() {
+}
