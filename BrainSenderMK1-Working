@@ -1,0 +1,61 @@
+#include <WiFi.h>
+#include <esp_now.h>
+#include "esp_wifi.h"
+
+uint8_t receiverMac[] = {0x1C, 0xDB, 0xD4, 0x76, 0x13, 0x00};
+
+#define BUTTON_PIN D10
+
+typedef struct struct_message {
+  bool buttonPressed;
+} struct_message;
+
+struct_message myData;
+
+esp_now_peer_info_t peerInfo;
+
+void OnDataSent(const wifi_tx_info_t *info, esp_now_send_status_t status) {
+  Serial.print("Send status: ");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(2000);
+
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
+
+  WiFi.mode(WIFI_STA);
+  esp_wifi_start();
+
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+
+  esp_now_register_send_cb(OnDataSent);
+
+  memcpy(peerInfo.peer_addr, receiverMac, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+
+  if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+    Serial.println("Failed to add peer");
+    return;
+  }
+
+  Serial.println("Brain sender ready");
+}
+
+void loop() {
+  myData.buttonPressed = !digitalRead(BUTTON_PIN);
+
+  esp_err_t result = esp_now_send(receiverMac, (uint8_t *)&myData, sizeof(myData));
+
+  Serial.print("Button: ");
+  Serial.print(myData.buttonPressed);
+  Serial.print(" | Send result: ");
+  Serial.println(result == ESP_OK ? "OK" : "ERROR");
+
+  delay(50);
+}
