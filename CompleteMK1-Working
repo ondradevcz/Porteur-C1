@@ -1,0 +1,315 @@
+#include <Wire.h>
+#include <Adafruit_MCP23X17.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7789.h>
+#include <Adafruit_NeoPixel.h>
+#include <SPI.h>
+
+// ===== DISPLAY =====
+#define TFT_CS   D1
+#define TFT_DC   D2
+#define TFT_RST  D3
+#define TFT_MOSI D10
+#define TFT_SCLK D8
+#define TFT_BL   D0
+
+#define YELLOW 0xFFE0
+#define WHITE  ST77XX_WHITE
+#define BLACK  ST77XX_BLACK
+
+Adafruit_ST7789 tft = Adafruit_ST7789(
+  TFT_CS, TFT_DC, TFT_MOSI, TFT_SCLK, TFT_RST
+);
+
+// ===== NEOPIXEL =====
+#define LED_PIN   D9
+#define LED_COUNT 8
+
+Adafruit_NeoPixel strip(LED_COUNT, LED_PIN, NEO_GRB + NEO_KHZ800);
+
+// ===== MCP23017 =====
+Adafruit_MCP23X17 mcp;
+
+// Your working I2C wiring
+#define I2C_SDA D5
+#define I2C_SCL D4
+
+// A0-A7 = 0-7, B0-B7 = 8-15
+#define PADDLE_UP      0
+#define PADDLE_DOWN    1
+#define BUTTON1        2
+#define BUTTON2        3
+#define ENC1_A         4
+#define ENC1_B         5
+#define BUTTON3        6
+#define BUTTON4        7
+#define ENC2_A         8
+#define ENC2_B         9
+
+// ===== STATE =====
+int gear = 3;
+int speed = 128;
+
+int displayedGear = -999;
+int displayedSpeed = -999;
+
+int displayBrightness = 180; // 0-255
+int ledBrightness = 25;      // 0-255
+
+int lastEnc1A;
+int lastEnc2A;
+
+bool lastPaddleUp;
+bool lastPaddleDown;
+bool lastBtn1;
+bool lastBtn2;
+bool lastBtn3;
+bool lastBtn4;
+
+unsigned long lastSpeedDrawTime = 0;
+const unsigned long speedDrawIntervalMs = 33;
+bool pressed(uint8_t pin) {
+  return mcp.digitalRead(pin) == LOW;
+}
+
+// ===== DISPLAY BRIGHTNESS =====
+// Your display BL is active LOW.
+// Simple PWM using analogWrite. If it flickers badly, we can switch to ledc.
+void setDisplayBrightness(int value) {
+  displayBrightness = constrain(value, 0, 255);
+
+  // active LOW: lower output = brighter
+  analogWrite(TFT_BL, 255 - displayBrightness);
+}
+
+// ===== LED BRIGHTNESS =====
+void setLedBrightness(int value) {
+  ledBrightness = constrain(value, 0, 255);
+  strip.setBrightness(ledBrightness);
+  strip.show();
+}
+
+// ===== DISPLAY UI =====
+void drawStaticDashboard() {
+  tft.fillScreen(BLACK);
+
+  // Logo / label
+  tft.setTextColor(YELLOW);
+  tft.setTextSize(1);
+  tft.setCursor(8, 8);
+  tft.print("PORTEUR C1");
+
+  // Gear label
+  tft.setTextColor(YELLOW);
+  tft.setTextSize(1);
+  tft.setCursor(129, 66);
+  tft.print("GEAR");
+
+  // Speed unit
+  tft.setTextColor(YELLOW);
+  tft.setTextSize(1);
+  tft.setCursor(232, 58);
+  tft.print("KM/H");
+
+  void drawGear(bool force = false);
+  void drawSpeed(bool force = false);
+
+  drawGear(true);
+  drawSpeed(true);
+}
+
+void drawGear(bool force = false) {
+  if (!force && gear == displayedGear) return;
+
+  // Clear only gear number area
+  tft.fillRect(95, 0, 90, 65, BLACK);
+
+  tft.setTextColor(WHITE);
+  tft.setTextSize(8);
+  tft.setCursor(118, 8);
+  tft.print(gear);
+
+  displayedGear = gear;
+}
+
+void drawSpeed(bool force = false) {
+  if (!force && speed == displayedSpeed) return;
+
+  // Clear only speed number area, not KM/H
+  tft.fillRect(198, 10, 84, 42, BLACK);
+
+  tft.setTextColor(YELLOW);
+  tft.setTextSize(4);
+
+  // Right-ish aligned manually for 1/2/3 digit speeds
+  if (speed < 10) {
+    tft.setCursor(245, 15);
+  } else if (speed < 100) {
+    tft.setCursor(225, 15);
+  } else {
+    tft.setCursor(205, 15);
+  }
+
+  tft.print(speed);
+
+  displayedSpeed = speed;
+}
+
+// ===== RPM BAR =====
+void showDemoRPMBar() {
+  strip.clear();
+
+  // Fixed demo bar for brightness testing
+  for (int i = 0; i < LED_COUNT; i++) {
+    if (i < 3)
+      strip.setPixelColor(i, strip.Color(0, 180, 0));
+    else if (i < 5)
+      strip.setPixelColor(i, strip.Color(180, 180, 0));
+    else if (i < 7)
+      strip.setPixelColor(i, strip.Color(255, 80, 0));
+    else
+      strip.setPixelColor(i, strip.Color(180, 0, 0));
+  }
+
+  strip.show();
+}
+
+// ===== ENCODERS =====
+int8_t readEncoder(uint8_t pinA, uint8_t pinB, int &lastA) {
+  int8_t delta = 0;
+
+  int currentA = mcp.digitalRead(pinA);
+  int currentB = mcp.digitalRead(pinB);
+
+  if (currentA != lastA) {
+    if (currentA == LOW) {
+      delta = (currentB == HIGH) ? 1 : -1;
+    }
+    lastA = currentA;
+  }
+
+  return delta;
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  Serial.println("PORTEUR C1 WIRED BRAIN STARTING");
+
+  // Backlight pin
+  pinMode(TFT_BL, OUTPUT);
+  setDisplayBrightness(displayBrightness);
+
+  // Display
+  tft.init(76, 284);
+  tft.setRotation(1);
+  tft.invertDisplay(false);
+
+  // NeoPixel
+  strip.begin();
+  setLedBrightness(ledBrightness);
+  showDemoRPMBar();
+
+  // MCP23017
+  Wire.begin(I2C_SDA, I2C_SCL);
+
+  if (!mcp.begin_I2C(0x20)) {
+    Serial.println("MCP23017 NOT FOUND");
+    while (1);
+  }
+
+  Serial.println("MCP23017 READY");
+
+  for (int i = 0; i <= 9; i++) {
+    mcp.pinMode(i, INPUT_PULLUP);
+  }
+
+  lastEnc1A = mcp.digitalRead(ENC1_A);
+  lastEnc2A = mcp.digitalRead(ENC2_A);
+
+  lastPaddleUp = pressed(PADDLE_UP);
+  lastPaddleDown = pressed(PADDLE_DOWN);
+  lastBtn1 = pressed(BUTTON1);
+  lastBtn2 = pressed(BUTTON2);
+  lastBtn3 = pressed(BUTTON3);
+  lastBtn4 = pressed(BUTTON4);
+
+  drawStaticDashboard();
+
+  Serial.println("PORTEUR C1 READY");
+}
+
+void loop() {
+  bool paddleUp = pressed(PADDLE_UP);
+  bool paddleDown = pressed(PADDLE_DOWN);
+  bool btn1 = pressed(BUTTON1);
+  bool btn2 = pressed(BUTTON2);
+  bool btn3 = pressed(BUTTON3);
+  bool btn4 = pressed(BUTTON4);
+
+  // ===== FAST PADDLES =====
+  if (paddleUp && !lastPaddleUp) {
+    gear++;
+    if (gear > 6) gear = 6;
+
+    Serial.println("PADDLE UP");
+    drawGear();
+  }
+
+  if (paddleDown && !lastPaddleDown) {
+    gear--;
+    if (gear < 1) gear = 1;
+
+    Serial.println("PADDLE DOWN");
+    drawGear();
+  }
+
+  // ===== BUTTONS =====
+  if (btn1 && !lastBtn1) Serial.println("BUTTON 1");
+  if (btn2 && !lastBtn2) Serial.println("BUTTON 2");
+  if (btn3 && !lastBtn3) Serial.println("BUTTON 3");
+  if (btn4 && !lastBtn4) Serial.println("BUTTON 4");
+
+  // ===== ENCODERS =====
+  int8_t enc1 = readEncoder(ENC1_A, ENC1_B, lastEnc1A);
+  int8_t enc2 = readEncoder(ENC2_A, ENC2_B, lastEnc2A);
+
+  // Encoder 1 = display brightness
+  if (enc1 != 0) {
+    displayBrightness += enc1 * 15;
+    displayBrightness = constrain(displayBrightness, 0, 255);
+
+    setDisplayBrightness(displayBrightness);
+
+    Serial.print("DISPLAY BRIGHTNESS: ");
+    Serial.println(displayBrightness);
+  }
+
+  // Encoder 2 = NeoPixel brightness
+  if (enc2 != 0) {
+    ledBrightness += enc2 * 15;
+    ledBrightness = constrain(ledBrightness, 0, 255);
+
+    setLedBrightness(ledBrightness);
+    showDemoRPMBar();
+
+    Serial.print("LED BRIGHTNESS: ");
+    Serial.println(ledBrightness);
+  }
+
+  // ===== SPEED DRAW RATE LIMIT =====
+  // Later this will update from telemetry.
+  // For now speed is static, but this structure prevents visible flicker.
+  if (millis() - lastSpeedDrawTime >= speedDrawIntervalMs) {
+    drawSpeed();
+    lastSpeedDrawTime = millis();
+  }
+
+  lastPaddleUp = paddleUp;
+  lastPaddleDown = paddleDown;
+  lastBtn1 = btn1;
+  lastBtn2 = btn2;
+  lastBtn3 = btn3;
+  lastBtn4 = btn4;
+}
